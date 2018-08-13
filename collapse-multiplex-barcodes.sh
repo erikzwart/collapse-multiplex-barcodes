@@ -3,7 +3,6 @@
 # erik.zwart@gmail.com
 # August 2018
 # ?check minimum length of read
-# ?filter on minimum quality
 # ?add demultiplex option to samples
 print_usage() {
 	echo "-----------------------------------------------"
@@ -14,24 +13,34 @@ print_usage() {
 	echo "	fastq file [L1] gzipped"
 	echo "-l2, -lane2"
 	echo "	fastq file [L2] gzipped"
+
+	echo "-c, -count"
+	echo "	minimum read count threshold, default 2"
+
+	echo "-m, -length"
+	echo "	minimum length of read (bp)"
+
 	echo "-o, -output"
 	echo "	output file containing the compressed barcode data"
 	echo "-t, -threads"
 	echo "	OPTIONAL: number of threads to be used, default 4"
+
+	echo "-q, -quality"
+	echo "	OPTIONAL: minimum quality score of read"
+	echo "	value must be set between 1 and 40"
+	echo "	https://en.wikipedia.org/wiki/FASTQ_format#Encoding"
+	echo "	https://en.wikipedia.org/wiki/Phred_quality_score"
+	echo ""
+	echo "	Phred Quality Score, Probability of incorrect base call, Base call accurary"
+	echo "	10, 1 in 10, 90%"
+	echo "	20, 1 in 100, 99%"
+	echo "	30, 1 in 1000, 99.9%"
+	echo "	40, 1 in 10,000, 99.99%"
+
 	echo "-h, -help"
 	echo "	print help message and exit"
 	echo "-v, -version"
 	echo "	print version of the program and exit"
-}
-
-chr() {
-  [ "$1" -lt 256 ] || return 1
-  printf "\\$(printf '%03o' "$1")"
-}
-
-ord() {
-  LC_CTYPE=C printf '%d' "'$1"
-	#echo $LC_CTYPE
 }
 
 test_fastq() {
@@ -87,8 +96,11 @@ else
 		case "$opt" in
 			"-l1"|"-lane1" 	) L1="$1"; shift;;
 			"-l2"|"-lane2" 	) L2="$1"; shift;;
+			"-c"|"-count"   ) COUNT="$1"; shift;;
+			"-m"|"-length"  ) MINLEN="$1"; shift;;
 			"-o"|"-output"	) OUTPUT="$1"; shift;;
 			"-t"|"-threads"	) THREADS="$1"; shift;;
+			"-q"|"-quality" ) QUALITY="$1"; shift;;
 			"-v"|"-version"	) echo "version 0.1"; exit 0;;
 			*				) echo "ERROR: Invalid argument: \""$opt"\"" >&2
 							  exit 1;;
@@ -125,9 +137,54 @@ else
 	esac
 fi
 
+if [[ "$QUALITY" == "" ]];
+then
+	# minimum read quality is not set, defaulting to lowest setting 0 (0=!==33)
+	QUALITY=0
+elif [[ "$QUALITY" -lt 0 || "$QUALITY" -gt 40 ]];
+then
+	echo "ERROR: [-q, -quality] invalid argument."
+	exit 1
+else
+	case "$QUALITY" in
+		(*[!0-9]*|'') echo "ERROR: [-q, -quality] invalid argument." >&2; exit 1
+		(*			) ;;
+	esac
+fi 
+
 if [[ $L1 ]]; then check_fastq $L1; else echo "ERROR: [-l1, -lane1] is not set."; exit 1; fi
 if [[ $L2 ]]; then check_fastq $L2; fi
 
+if [[ "$COUNT" == "" ]];
+then
+	# minimum read count is not set, default to 2 (remove singletons)
+	COUNT=2
+elif [[ "$COUNT" -le 1 ]];
+then
+	echo "ERROR: [-c, -count] is set to low." >&2; exit 1
+else
+	case "$COUNT" in
+		(*[!0-9]*|'') echo "ERROR: [-c, -count] invalid argument." >&2; exit 1
+		(*			) ;;
+	esac
+fi
+
+if [[ "$MINLEN" == "" ]];
+then
+	# minimum read length is not set, default to 0 (in effect ignore setting)
+	MINLEN=0
+elif [[ "$MINLEN" -gt 150 ]];
+then
+	echo "WARNING: [-m, -length] is set higher then expected."
+elif [[ "$MINLEN" -le -1 ]];
+then
+	echo "ERROR: [-m, -length] is set to low" >&2; exit 1
+else
+	case "$MINLEN" in
+		(*[!0-9]*|'') echo "ERROR: [-m, -length] invalid argument." >&2; exit 1
+		(*			) ;;
+	esac
+fi
 #ord "a"
 # quality score of 10 = 10+33 ASCII
 #chr 43
@@ -137,8 +194,8 @@ if [[ $L2 ]]; then check_fastq $L2; fi
 ##qs=33
 ##offset=33
 # convert decimal to ascii value
-##a=$(printf "\\$(printf '%03o' $(( $qs + $offset )))")
-#echo $a
+a=$(printf "\\$(printf '%03o' $(( $QUALITY + 33 )))")
+echo $a
 ##qa="ABCDEFGHIJ"
 
 ##if  egrep -e "[^/${a}-J]" <<< $qa
@@ -147,9 +204,23 @@ if [[ $L2 ]]; then check_fastq $L2; fi
 ##fi
 
 # join L1 and L2 if L2 is set: zcat -c L1 L2
-#zcat -c $L1 | head -8 | awk 'NR % 4 == 0 || NR % 4 == 2'
-#zcat -c $L1 | head -8 | awk 'NR % 4 == 0' | egrep -e "[!-J]"
-#zcat -c $L1 | head -8 | awk '{print NR % 4 == 0}' 
+#a="+"
+#echo $a
+#zcat -c $L1 | head -80 | awk '{if (NR % 4 == 0) {
+#	if ($1 ~ /[^'$a'-'#']/) {pass = 1} else {pass = 0}}};
+#	{if (NR % 4 == 2 && pass) {print $1}}' > out_2.out
+
+#zcat -c $L1 $L2 | awk '{if (NR % 4 == 0) {
+#	if ($1 ~ /[^'$a'-'J']/) {pass = 0} else {pass = 1}}};
+#	{if (NR % 4 == 2 && pass) {print $1}}' | sort --parallel=$THREADS |
+#	uniq -d -c | sort --parallel=$THREADS -nr | sed -e 's/\s*//;s/\s/\t/' |
+#	awk 'BEGIN {FS = "\t"; OFS = "\t"};{print $2,$1}' > $OUTPUT
+
+# add minimum length filter
+# add minimum read count threshold
+
+#echo "----"
+#zcat -c $L1 | head -80 | awk 'NR % 4 == 2'
 
 # retrieve the sequences only
 ##zcat -c $L1 | awk 'NR == 0 || NR % 4 == 2' > out_1.out
