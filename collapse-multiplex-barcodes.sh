@@ -1,9 +1,10 @@
 #!/bin/bash
+START=$(date +%s)
 # Erik Zwart
 # erik.zwart@gmail.com
 # August 2018
-# ?check minimum length of read
 # ?add demultiplex option to samples
+# ? printout files and setting used
 print_usage() {
 	echo "-----------------------------------------------"
 	echo "Compress Multiplex Barcode Deep-Sequencing data"
@@ -45,16 +46,17 @@ print_usage() {
 
 test_fastq() {
 	# test fastq file to see if it is valid
+	# ! will only test the first read !
 	# line 2 needs to contain the read only bases are allowed ACTGN
 	# line 4 needs to contain the quality information, FASTQ quality score Sanger or Illumina 1.8+
 	f=$1
-	if zcat -c $f | head -2 | tail -1 | egrep -ie '[^ACTGN]'
+	if zcat -c $f | head -2 | tail -1 | egrep -ie '[^ACTGN]';
 	then
 		echo "ERROR: FASTQ data has invalid characters"
 		exit 1
 	fi
 
-	if zcat -c $f | head -4 | tail -1 | egrep -e '[^!-J]'
+	if zcat -c $f | head -4 | tail -1 | egrep -e '[^!-J]';
 	then
 		echo "ERROR: Invalid FASTQ quality encoding"
 		exit 1
@@ -64,7 +66,7 @@ test_fastq() {
 check_fastq() {
 	# see if user provided fastq file is valid and gzipped .gz
 	f=$1
-	if [ ! -f $f ]
+	if [ ! -f $f ];
 	then
 		echo "ERROR: input fastq file does not exists."
 		exit 1
@@ -78,8 +80,7 @@ check_fastq() {
 		return 0
 	fi
 }
-# ./collapse-multiplex-barcodes.sh -l1 ./data/reads_100k.fastq.gz -l2 ./data/reads_100k.fastq.gz -o test.fq
-# https://stackoverflow.com/questions/18414054/bash-getopts-reading-optarg-for-optional-flags
+
 if [[ "$1" =~ ^((-{1,2})([Hh]$|[Hh][Ee][Ll][Pp])|)$ ]];
 then
 	print_usage; exit 1
@@ -126,7 +127,7 @@ elif [[ "$THREADS" -le 0 ]];
 then
 	# number of threads is set to 0 or lower, defaulting to 4 threads
 	THREADS=4
-elif [[ "$THREADS" -gt 33 ]];
+elif [[ "$THREADS" -gt 32 ]];
 then
 	echo "WARNING: [-t, -threads] is set to $THREADS"
 	echo "Are you sure your system supports that?"
@@ -143,8 +144,7 @@ then
 	QUALITY=0
 elif [[ "$QUALITY" -lt 0 || "$QUALITY" -gt 40 ]];
 then
-	echo "ERROR: [-q, -quality] invalid argument."
-	exit 1
+	echo "ERROR: [-q, -quality] invalid argument, value must be set between 1 and 40." >&2; exit 1
 else
 	case "$QUALITY" in
 		(*[!0-9]*|'') echo "ERROR: [-q, -quality] invalid argument." >&2; exit 1
@@ -158,7 +158,7 @@ if [[ $L2 ]]; then check_fastq $L2; fi
 if [[ "$COUNT" == "" ]];
 then
 	# minimum read count is not set, default to 2 (remove singletons)
-	COUNT=2
+	COUNT=0
 elif [[ "$COUNT" -le 1 ]];
 then
 	echo "ERROR: [-c, -count] is set to low." >&2; exit 1
@@ -185,6 +185,12 @@ else
 		(*			) ;;
 	esac
 fi
+# see if minimum read length is set to high
+if `zcat -c $L1 | head -2 | tail -1 | awk '{if (length($0) < '$MINLEN') {exit 0} else {exit 1} }'`;
+then
+	echo "ERROR: [-m, -length] minimum set to high" >&2; exit 1
+fi
+
 #ord "a"
 # quality score of 10 = 10+33 ASCII
 #chr 43
@@ -193,29 +199,34 @@ fi
 # minimal quality score 32 corresponds to A 65
 ##qs=33
 ##offset=33
-# convert decimal to ascii value
+# convert decimal to ascii value + phred offset
 a=$(printf "\\$(printf '%03o' $(( $QUALITY + 33 )))")
-echo $a
-##qa="ABCDEFGHIJ"
-
-##if  egrep -e "[^/${a}-J]" <<< $qa
-##then
-	##echo "mismatch"
-##fi
-
-# join L1 and L2 if L2 is set: zcat -c L1 L2
-#a="+"
 #echo $a
-#zcat -c $L1 | head -80 | awk '{if (NR % 4 == 0) {
-#	if ($1 ~ /[^'$a'-'#']/) {pass = 1} else {pass = 0}}};
-#	{if (NR % 4 == 2 && pass) {print $1}}' > out_2.out
 
 #zcat -c $L1 $L2 | awk '{if (NR % 4 == 0) {
 #	if ($1 ~ /[^'$a'-'J']/) {pass = 0} else {pass = 1}}};
 #	{if (NR % 4 == 2 && pass) {print $1}}' | sort --parallel=$THREADS |
 #	uniq -d -c | sort --parallel=$THREADS -nr | sed -e 's/\s*//;s/\s/\t/' |
 #	awk 'BEGIN {FS = "\t"; OFS = "\t"};{print $2,$1}' > $OUTPUT
+#echo $COUNT
 
+#zcat -c $L1 $L2 | awk '{if (NR % 4 == 0) {
+#	if ($1 ~ /[^'$a'-'J']/) {pass = 0} else {pass = 1}}};
+#	{if (NR % 4 == 2 && pass) {print $1}}' | sort --parallel=$THREADS |
+#	uniq -d -c | sort --parallel=$THREADS -nr | sed -e 's/\s*//;s/\s/\t/' |
+#	awk 'BEGIN {FS = "\t"; OFS = "\t"};{if ('$COUNT' == 0) {print $2,$1} else {
+#	if ($1 >= '$COUNT') {print $2,$1}}}' > $OUTPUT
+
+zcat -c $L1 $L2 | awk '{if (NR % 4 == 0) {if ($1 ~ /[^'$a'-'J']/) {pass = 0} else {pass = 1}}};
+	{if (NR % 4 == 2 && pass) {if (length($1) >= '$MINLEN') {print $1}}}' |
+	sort --parallel=$THREADS | uniq -d -c | sort --parallel=$THREADS -nr | 
+	sed -e 's/\s*//;s/\s/\t/' |	awk 'BEGIN {FS = "\t"; OFS = "\t"};
+	{if ('$COUNT' == 0) {print $2,$1} else {if ($1 >= '$COUNT') {print $2,$1}}}' > $OUTPUT
+
+
+END=$(date +%s)
+DIFF=$(( $END - $START ))
+echo "It took $DIFF seconds"
 # add minimum length filter
 # add minimum read count threshold
 
