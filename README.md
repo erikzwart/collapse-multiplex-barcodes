@@ -41,4 +41,4 @@ OPTIONS:
   
 USAGE:
 
-bash ./collapse-multiplex-barcodes.sh -l1 data.fastq -o out.txt
+bash collapse-multiplex-barcodes.sh -l1 data.fastq -o out.txt
