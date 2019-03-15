@@ -2,6 +2,7 @@
 Collapse deep-sequencing multiplex barcode data
 
 OPTIONS:
+
 -a	lane 1, fastq file [L1] gzipped (required)
 
 -b	lane 2, fastq file [L2] gzipped (optional)
